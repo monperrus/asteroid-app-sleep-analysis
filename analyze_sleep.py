@@ -123,45 +123,53 @@ def rolling_median(a, win):
         out[i] = np.median(a[lo:hi])
     return out
 
-def rolling_std(a, win):
+def rolling_mean(a, win):
+    return np.convolve(a, np.ones(win) / win, mode="same")
+
+def rolling_std_centered(a, win):
     half = win // 2
-    out = np.empty_like(a)
+    out = np.empty_like(a, dtype=float)
     for i in range(len(a)):
-        lo, hi = max(0, i-half), min(len(a), i+half+1)
+        lo, hi = max(0, i - half), min(len(a), i + half + 1)
         out[i] = np.std(a[lo:hi])
     return out
 
-hr_baseline = rolling_median(hr_epoch, win=61)   # ~30 min
+hr_baseline = rolling_median(hr_epoch, win=61)      # ~30 min
 hr_detrend = hr_epoch - hr_baseline
-hr_var = rolling_std(hr_epoch, win=5)            # ~2.5 min
+hr_var = rolling_std_centered(hr_epoch, win=5)      # ~2.5 min, beat-to-beat proxy
+move_level = rolling_mean(activity, win=10)         # ~5 min movement level
 
-feat_idx = np.flatnonzero(sleep_mask)
-X = np.column_stack([
-    log_act[feat_idx],
-    hr_detrend[feat_idx],
-    hr_var[feat_idx],
-])
-# standardize
-Xs = (X - X.mean(axis=0)) / X.std(axis=0)
+# REM is, by definition, near-total skeletal-muscle atonia (movement suppressed)
+# *combined with* an autonomically active, variable heart rate. A rise in HR
+# variability alone is NOT REM if movement is also elevated - that combination is
+# the actigraphy signature of an arousal/awakening instead (motor tone returning).
+# So gate REM out of the high-movement epochs *before* clustering on HR, rather
+# than letting an unconstrained clustering pick REM by HR alone.
+sleep_idx2 = np.flatnonzero(sleep_mask)
+move_km = KMeans(n_clusters=2, n_init=10, random_state=0).fit(
+    np.log1p(move_level[sleep_idx2]).reshape(-1, 1)
+)
+quiet_label = np.argmin(move_km.cluster_centers_.flatten())
+quiet_mask = np.zeros(n_epochs, dtype=bool)
+quiet_mask[sleep_idx2[move_km.labels_ == quiet_label]] = True
+active_mask = sleep_mask & ~quiet_mask  # elevated movement -> can't be REM -> "light"
 
-km3 = KMeans(n_clusters=3, n_init=10, random_state=0).fit(Xs)
-labels3 = km3.labels_
-centers3 = km3.cluster_centers_  # in standardized space
-# map back to real units for interpretation
-centers3_real = centers3 * X.std(axis=0) + X.mean(axis=0)
-
-# deep sleep: lowest activity + most-negative HR-vs-local-baseline
-# REM: low activity + HR at/above local baseline and/or more beat-to-beat variability
-# light: intermediate activity, the remaining cluster
-order_by_hrdetrend = np.argsort(centers3_real[:,1])  # ascending detrended HR
-deep_c = order_by_hrdetrend[0]
-rem_c = order_by_hrdetrend[-1]
-light_c = order_by_hrdetrend[1]
-
-stage_names = {deep_c: "deep", rem_c: "rem", light_c: "light"}
 epoch_stage = np.array(["wake"] * n_epochs, dtype=object)
-for j, i in enumerate(feat_idx):
-    epoch_stage[i] = stage_names[labels3[j]]
+epoch_stage[active_mask] = "light"
+
+# Among the quiet (movement-suppressed) epochs, deep vs REM is now a pure HR
+# question: deep = HR at/below local baseline and stable; REM = HR at/above
+# baseline and/or more beat-to-beat variable.
+quiet_idx = np.flatnonzero(quiet_mask)
+Xq = np.column_stack([hr_detrend[quiet_idx], hr_var[quiet_idx]])
+Xqs = (Xq - Xq.mean(axis=0)) / Xq.std(axis=0)
+hr_km = KMeans(n_clusters=2, n_init=10, random_state=0).fit(Xqs)
+hr_centers_real = hr_km.cluster_centers_ * Xq.std(axis=0) + Xq.mean(axis=0)
+deep_label = np.argmin(hr_centers_real[:, 0])  # more negative hr_detrend = deep
+rem_label = 1 - deep_label
+
+for j, i in enumerate(quiet_idx):
+    epoch_stage[i] = "rem" if hr_km.labels_[j] == rem_label else "deep"
 
 # ---- Report ----
 def fmt_dur(epochs):
@@ -187,9 +195,12 @@ for name in ["light","deep","rem"]:
     pct = n/sleep_epochs_in_window*100 if sleep_epochs_in_window else 0
     print(f"  {name:5s}: {fmt_dur(n):8s} ({pct:.1f}% of sleep)")
 print()
-print("Cluster centers (log-activity, HR-vs-local-baseline, HR variability), by stage:")
-for c,name in stage_names.items():
-    print(f"  {name:5s}: activity(log)={centers3_real[c,0]:.2f}  hr_detrend={centers3_real[c,1]:+.1f} bpm  hr_var={centers3_real[c,2]:.2f}")
+print("Stage cluster centers (move_level, hr_detrend, hr_var), by stage:")
+for name in ["deep", "rem", "light"]:
+    m = (epoch_stage[window] == name)
+    if m.sum():
+        print(f"  {name:5s}: move_level={move_level[window][m].mean():6.1f}  "
+              f"hr_detrend={hr_detrend[window][m].mean():+.1f} bpm  hr_var={hr_var[window][m].mean():.2f}")
 
 # hypnogram string, one char per epoch, 60 epochs (30 min) per line
 sym = {"wake":"W","light":"L","deep":"D","rem":"R"}
@@ -202,20 +213,10 @@ for i in range(0, len(line), 60):
 # ---- Arousal detection: joint movement + heart-rate change ----
 # A single-epoch movement spike with no heart-rate response is just repositioning.
 # A sustained *joint* rise in movement level and HR variability above the sleeping
-# baseline is the signature of an actual arousal (stirring toward wake).
+# baseline is the signature of an actual arousal (stirring toward wake) - the
+# mirror image of REM, which requires movement to stay LOW (see stage
+# classification above).
 WIN = 10  # ~5 min of 30s epochs
-
-def rolling_mean(a, win):
-    kernel = np.ones(win) / win
-    return np.convolve(a, kernel, mode="same")
-
-def rolling_std_centered(a, win):
-    half = win // 2
-    out = np.empty_like(a, dtype=float)
-    for i in range(len(a)):
-        lo, hi = max(0, i - half), min(len(a), i + half + 1)
-        out[i] = np.std(a[lo:hi])
-    return out
 
 def find_runs(mask, min_len):
     runs, start = [], None
@@ -230,8 +231,7 @@ def find_runs(mask, min_len):
         runs.append((start, len(mask) - 1))
     return runs
 
-move_level = rolling_mean(activity, WIN)
-hr_var_level = rolling_std_centered(hr_epoch, WIN)
+hr_var_level = rolling_std_centered(hr_epoch, WIN)  # coarser than hr_var (win=5), for sustained-rise detection
 
 move_base = np.median(move_level[sleep_mask])
 hr_var_base = np.median(hr_var_level[sleep_mask])
