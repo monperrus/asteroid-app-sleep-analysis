@@ -198,3 +198,65 @@ print()
 print("Hypnogram (30s/char, 30min/line):")
 for i in range(0, len(line), 60):
     print(f"{ts(i):>6}  {line[i:i+60]}")
+
+# ---- Arousal detection: joint movement + heart-rate change ----
+# A single-epoch movement spike with no heart-rate response is just repositioning.
+# A sustained *joint* rise in movement level and HR variability above the sleeping
+# baseline is the signature of an actual arousal (stirring toward wake).
+WIN = 10  # ~5 min of 30s epochs
+
+def rolling_mean(a, win):
+    kernel = np.ones(win) / win
+    return np.convolve(a, kernel, mode="same")
+
+def rolling_std_centered(a, win):
+    half = win // 2
+    out = np.empty_like(a, dtype=float)
+    for i in range(len(a)):
+        lo, hi = max(0, i - half), min(len(a), i + half + 1)
+        out[i] = np.std(a[lo:hi])
+    return out
+
+def find_runs(mask, min_len):
+    runs, start = [], None
+    for i, v in enumerate(mask):
+        if v and start is None:
+            start = i
+        elif not v and start is not None:
+            if i - start >= min_len:
+                runs.append((start, i - 1))
+            start = None
+    if start is not None and len(mask) - start >= min_len:
+        runs.append((start, len(mask) - 1))
+    return runs
+
+move_level = rolling_mean(activity, WIN)
+hr_var_level = rolling_std_centered(hr_epoch, WIN)
+
+move_base = np.median(move_level[sleep_mask])
+hr_var_base = np.median(hr_var_level[sleep_mask])
+
+is_arousal = sleep_mask & (move_level > 1.5 * move_base) & (hr_var_level > 1.3 * hr_var_base)
+arousal_runs = find_runs(is_arousal, min_len=6)  # sustained >= 3 min in both signals
+
+print()
+print(f"Sleeping baseline : activity~{move_base:.0f} (5min mean)  hr_std~{hr_var_base:.2f} bpm (5min window)")
+print("Joint movement+HR arousal windows (sustained rise in both signals, likely stirring/waking):")
+if not arousal_runs:
+    print("  none detected")
+for s, e in arousal_runs:
+    dur = fmt_dur(e - s + 1)
+    print(f"  {ts(s)}-{ts(e)}  ({dur})  activity~{move_level[s:e+1].mean():.0f} (x{move_level[s:e+1].mean()/move_base:.1f} baseline)"
+          f"  hr_std~{hr_var_level[s:e+1].mean():.2f} (x{hr_var_level[s:e+1].mean()/hr_var_base:.1f} baseline)"
+          f"  hr {hr_epoch[s:e+1].min():.0f}-{hr_epoch[s:e+1].max():.0f} bpm")
+
+# movement-only spikes: brief high-activity epochs during sleep that never made it
+# into an arousal run above (no sustained HR co-response) -> likely repositioning
+spike_mask = sleep_mask & (activity > 5 * np.median(activity[sleep_mask])) & ~is_arousal
+spike_idx = np.flatnonzero(spike_mask)
+print()
+print("Movement-only spikes (no sustained HR response - likely repositioning):")
+if len(spike_idx) == 0:
+    print("  none detected")
+for i in spike_idx:
+    print(f"  {ts(i)}  activity={activity[i]:.0f}  hr={hr_epoch[i]:.0f} bpm")
