@@ -23,3 +23,55 @@ non-REM, then drop merged bouts still under ~5 min (or flag them separately
 as "possible REM, sub-threshold duration" rather than reporting them as REM
 outright). Re-validate the resulting bout-length distribution against the
 ranges above before trusting per-bout output.
+
+## "unknown1" stage: unresolved HR-instability regime
+
+`analyze_sleep.py` labels an epoch `unknown1` when movement is suppressed
+(same "still" tier eligible for deep/REM) but HR variability sits well above
+the calibrated deep baseline (>1.8x `deep_hr_var_center`, see
+`UNSTABLE_HR_VAR_MULT`) without crossing into the REM cluster. It is
+deliberately never auto-resolved to `deep` or `rem`.
+
+This was first spotted as a ~38min stretch (04:33-05:11 on the
+2026-08-28 night) that visually and statistically didn't match the rest of
+that night's deep sleep: HR swung by 5-9 bpm sample-to-sample, quasi-periodic
+on roughly a 4-9 min cycle (weak autocorrelation peak, lag ~7-8 min), with
+movement staying flat throughout - so neither the movement-gated REM
+classifier nor the joint movement+HR arousal detector (which requires a
+*movement* response, not just an HR one) ever fired on it.
+
+Three competing hypotheses, none confirmable from this recording's signals
+(accelerometer + HR only - no SpO2, no respiration/airflow):
+
+- **(a) NREM cyclic alternating pattern (CAP) / recurring microarousals** - a
+  normal autonomic microstructure of light/deep NREM sleep that modulates HR
+  cyclically over minutes without producing a movement response. Would argue
+  this is legitimately NREM (deep or light), just not the quiescent kind the
+  current deep cluster is calibrated on.
+- **(b) Cyclic variation of heart rate (CVHR) from repeated brief respiratory
+  events (apnea/hypopnea)** - the classic surge-recover HR pattern
+  accompanying sleep-disordered breathing. Also leaves no actigraphy
+  movement signature, so is equally consistent with the data. Would argue
+  for flagging it as a distinct clinically-relevant regime, not a sleep
+  stage at all.
+- **(c) Under-detected REM** - given the night's aggregate REM% is already
+  suspiciously low relative to the normal ~20-25% of TST (see the REM
+  bout-duration issue above and the aggregate-percentage caveat it's tied
+  to), a real possibility is that some/most of `unknown1` actually *is* REM
+  that the movement+HR-cluster gate is still failing to recognize - e.g.
+  because this particular REM is unusually low-HRV for this person, or
+  because the "still" tier's REM cluster center is itself pulled toward the
+  small number of extreme HR spikes elsewhere in the night, making it too
+  strict to catch quieter REM. This is the interpretation we currently lean
+  towards, precisely because it would resolve two anomalies (a too-low REM%
+  and this unexplained regime) with one cause - but it is not confirmed, and
+  auto-labeling `unknown1` as `rem` would be assuming the conclusion instead
+  of testing it.
+
+**To do:** get a second signal (SpO2 minimum, or a respiration-derived
+signal) for at least one more `unknown1` night to adjudicate between (a)/(b)
+(respiratory events) vs (c) (REM). Until then, keep `unknown1` a separate,
+non-committal label rather than folding it into `deep` or `rem` - the
+aggregate REM%/deep% numbers already can't be trusted at face value (see
+above), and quietly reassigning `unknown1` to `rem` would inflate REM% based
+on a hypothesis, not evidence.
