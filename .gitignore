@@ -1,7 +1,10 @@
 __pycache__/
 *.pyc
+.pytest_cache/
+.ruff_cache/
 
 # raw biometric recordings and derived, regeneratable local artifacts
 *.jsonl
 calibration.json
 *_stages.png
+*_stages.html

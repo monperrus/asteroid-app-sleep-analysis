@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Categories=Applications;
+Exec=/home/ceres/.local/bin/sleep-recorder-launcher
+Icon=ios-moon-outline
+X-Asteroid-Center-Color=#314764
+X-Asteroid-Outer-Color=#07111E
+Name=Start Sleep Recording (10h)
+Comment=Record movement and heart rate for ten hours

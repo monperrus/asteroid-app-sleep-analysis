@@ -1,6 +1,22 @@
-# Sleep analysis
+# AsteroidOS sleep recorder and analysis
 
-We analyze sleep patterns
+Privacy-preserving sleep/wake research prototype for AsteroidOS. It combines
+the watch-side recorder in [`app-sleep/`](app-sleep/) with a local analyzer.
+It is not a medical device and does not provide clinical sleep staging.
+
+## Recorder
+
+[`app-sleep/`](app-sleep/) contains the launcher, system service, and sensor
+collector installed on the watch. Its
+[README](app-sleep/README.md) documents installation and recording.
+
+Use `app-sleep/fetch-sleep-recording.sh` to retrieve the newest recording into
+this repository, then analyze it with the command below. Recordings and
+generated charts are private local artifacts and are not committed.
+
+## Analysis
+
+The analyzer estimates sleep patterns from movement and heart-rate data.
 
 Movement is the primary signal; heart-rate trends and HRV should
 only help distinguish quiet wakefulness from sleep. 
@@ -11,7 +27,7 @@ https://pubmed.ncbi.nlm.nih.gov/37338335/.
 
 ## Requirements
 
-`pip install numpy scikit-learn matplotlib`
+`pip install numpy scikit-learn plotly`
 
 ## Usage
 
@@ -29,12 +45,14 @@ python3 analyze_sleep.py --analyze   night.jsonl   # classifies against calibrat
 ```
 
 `--analyze` prints a text report (sleep onset/offset, time-in-stage,
-hypnogram, arousal/spike listings) and writes `<stem>_stages.png`: 5 stacked
-time-series panels (raw movement, raw HR, and the three clustering inputs —
-movement level, HR-detrended, HR variability) with the classified stage
-shaded behind each one.
+hypnogram, arousal/spike listings) and writes `<stem>_stages.html`: 5 stacked
+interactive time-series panels (raw movement, raw HR, and the three
+clustering inputs — movement level, HR-detrended, HR variability) with the
+classified stage shaded behind each one. Hover over a shaded stage region to
+see its precise start/end and the characteristics (move_level, hr_detrend,
+hr_var) that drove its classification. Open the file in a browser.
 
-`calibration.json` and the generated `.png`/`.jsonl` files are local,
+`calibration.json` and the generated `.html`/`.jsonl` files are local,
 regeneratable/private artifacts and are gitignored — not checked in.
 
 ## Stages

@@ -121,6 +121,9 @@ def smooth_binary(arr, win=3):
 is_sleep = smooth_binary(is_sleep_raw.astype(float), win=3)
 
 # ---- Determine sleep period (onset to offset), allowing WASO in between ----
+# Comparison with the ground truth shows that these sustained-run time
+# boundaries are good. Keep this onset/offset logic independent from the
+# within-sleep stage cleanup below so smoothing stages cannot move them.
 sleep_idx = np.flatnonzero(is_sleep)
 if len(sleep_idx) == 0:
     raise SystemExit("No sleep detected")
@@ -277,6 +280,26 @@ for j, i in enumerate(twitch_idx):
     if twitch_labels[j] == rem_label:
         epoch_stage[i] = "rem"
 
+# A centered 5-epoch hr_var window can briefly cross the unknown1 threshold
+# because of a single HR excursion. Do not let that windowing artifact split a
+# stable surrounding stage: absorb an unknown1 island shorter than one complete
+# hr_var window only when both neighboring epochs have the same stage. This
+# preserves actual transitions and sustained unknown1 regimes, and deliberately
+# does not touch the already-validated sleep onset/offset boundaries above.
+MIN_UNKNOWN1_BOUT_EPOCHS = 5  # 2.5 min, matching the hr_var window
+run_start = 0
+while run_start < n_epochs:
+    run_end = run_start + 1
+    while run_end < n_epochs and epoch_stage[run_end] == epoch_stage[run_start]:
+        run_end += 1
+    if (epoch_stage[run_start] == "unknown1"
+            and run_end - run_start < MIN_UNKNOWN1_BOUT_EPOCHS
+            and run_start > 0
+            and run_end < n_epochs
+            and epoch_stage[run_start - 1] == epoch_stage[run_end]):
+        epoch_stage[run_start:run_end] = epoch_stage[run_start - 1]
+    run_start = run_end
+
 # ---- Report ----
 def fmt_dur(epochs):
     secs = epochs * EPOCH_S
@@ -372,11 +395,12 @@ if args.calibrate:
     print(f"\nCalibration saved to {CALIBRATION_PATH}")
 
 # ---- Figure: raw signals + clustering inputs, shaded by classified stage ----
+# Interactive (Plotly/HTML): hovering a shaded stage region shows its precise
+# start/end and the cluster-input characteristics (move_level, hr_detrend,
+# hr_var) that drove its classification, not just a static color band.
 if args.analyze:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    import matplotlib.dates as mdates
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
 
     STAGE_COLOR = {"wake": "#9e9e9e", "light": "#4c9be8", "deep": "#1b3a6b", "rem": "#e8734c", "unknown1": "#f2c744"}
 
@@ -389,49 +413,79 @@ if args.analyze:
     hr_dt = to_dt(hr_t)
 
     # merge consecutive same-stage epochs into runs so shading is a handful of
-    # axvspans, not one per epoch
+    # shapes, not one per epoch
     stage_runs, run_start = [], 0
     for i in range(1, n_epochs + 1):
         if i == n_epochs or epoch_stage[i] != epoch_stage[run_start]:
             stage_runs.append((run_start, i, epoch_stage[run_start]))
             run_start = i
 
-    def shade_stages(ax):
+    def y_range(a):
+        a = np.asarray(a, dtype=float)
+        a = a[~np.isnan(a)]
+        lo, hi = (a.min(), a.max()) if len(a) else (0.0, 1.0)
+        pad = (hi - lo) * 0.05 or 1.0
+        return lo - pad, hi + pad
+
+    panels = [
+        ("Raw movement magnitude", "accel mag", mov_dt, mov_mag, "lines"),
+        ("Raw heart rate", "bpm", hr_dt, hr_bpm, "markers"),
+        ("Movement level (quiet/active clustering input)", "move level", epoch_dt, move_level, "lines"),
+        ("HR detrended (deep/REM clustering input)", "hr - baseline", epoch_dt, hr_detrend, "lines"),
+        ("HR variability (deep/REM clustering input)", "hr std", epoch_dt, hr_var, "lines"),
+    ]
+
+    stage_totals = {
+        stage: fmt_dur(np.count_nonzero(epoch_stage == stage))
+        for stage in STAGE_COLOR
+    }
+    stage_totals_text = " · ".join(
+        f"{stage}: {stage_totals[stage]}" for stage in STAGE_COLOR
+    )
+
+    fig = make_subplots(rows=len(panels), cols=1, shared_xaxes=True, vertical_spacing=0.04,
+                         subplot_titles=[title for title, *_ in panels])
+
+    def stage_hover(s, e):
+        start_s = epoch_dt[s].strftime("%Y-%m-%d %H:%M:%S")
+        end_s = epoch_dt[min(e, n_epochs - 1)].strftime("%H:%M:%S")
+        dur = fmt_dur(e - s)
+        return (f"<b>{epoch_stage[s]}</b>  {start_s} – {end_s}  ({dur})<br>"
+                f"move_level={move_level[s:e].mean():.1f}  "
+                f"hr_detrend={hr_detrend[s:e].mean():+.1f} bpm  "
+                f"hr_var={hr_var[s:e].mean():.2f}")
+
+    seen_legend = set()
+    for row, (title, ylabel, xs, ys, mode) in enumerate(panels, start=1):
+        lo, hi = y_range(ys)
         for s, e, stage in stage_runs:
-            ax.axvspan(epoch_dt[s], epoch_dt[min(e, n_epochs - 1)], color=STAGE_COLOR[stage], alpha=0.3, lw=0)
+            x0, x1 = epoch_dt[s], epoch_dt[min(e, n_epochs - 1)]
+            show_legend = stage not in seen_legend
+            seen_legend.add(stage)
+            fig.add_trace(go.Scatter(
+                x=[x0, x1, x1, x0, x0], y=[lo, lo, hi, hi, lo],
+                mode="lines", line=dict(width=0), fill="toself",
+                fillcolor=STAGE_COLOR[stage], opacity=0.3, hoveron="fills",
+                text=stage_hover(s, e), hoverinfo="text",
+                name=stage, legendgroup=stage, showlegend=(row == 1 and show_legend),
+            ), row=row, col=1)
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode=mode, marker=dict(size=3, color="black"), line=dict(width=0.8, color="black"),
+            hoverinfo="skip", showlegend=False,
+        ), row=row, col=1)
+        fig.update_yaxes(title_text=ylabel, range=[lo, hi], row=row, col=1)
 
-    fig, axes = plt.subplots(5, 1, figsize=(14, 12), sharex=True)
+    fig.update_layout(
+        height=270 * len(panels),
+        title=dict(
+            text=(f"Sleep stages — {Path(PATH).stem}<br>"
+                  f"<sup>Total period by stage (full recording) — {stage_totals_text}</sup>"),
+        ),
+        hovermode="closest", legend=dict(title="stage", orientation="h", y=1.02, yanchor="bottom"),
+        margin=dict(t=120),
+    )
+    fig.update_xaxes(title_text="time", row=len(panels), col=1)
 
-    axes[0].plot(mov_dt, mov_mag, lw=0.3, color="black")
-    axes[0].set_ylabel("accel mag")
-    axes[0].set_title("Raw movement magnitude")
-
-    axes[1].plot(hr_dt, hr_bpm, ".", ms=2, color="black")
-    axes[1].set_ylabel("bpm")
-    axes[1].set_title("Raw heart rate")
-
-    axes[2].plot(epoch_dt, move_level, color="black", lw=0.8)
-    axes[2].set_ylabel("move level")
-    axes[2].set_title("Movement level (quiet/active clustering input)")
-
-    axes[3].plot(epoch_dt, hr_detrend, color="black", lw=0.8)
-    axes[3].set_ylabel("hr - baseline")
-    axes[3].set_title("HR detrended (deep/REM clustering input)")
-
-    axes[4].plot(epoch_dt, hr_var, color="black", lw=0.8)
-    axes[4].set_ylabel("hr std")
-    axes[4].set_title("HR variability (deep/REM clustering input)")
-
-    for ax in axes:
-        shade_stages(ax)
-    axes[-1].xaxis.set_major_formatter(mdates.DateFormatter("%H:%M", tz=epoch_dt[0].tzinfo))
-    axes[-1].set_xlabel("time")
-
-    legend_handles = [plt.Rectangle((0, 0), 1, 1, color=c, alpha=0.5) for c in STAGE_COLOR.values()]
-    fig.legend(legend_handles, STAGE_COLOR.keys(), loc="upper right", ncol=4, title="stage")
-    fig.suptitle(f"Sleep stages — {Path(PATH).stem}")
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
-
-    fig_path = Path(PATH).parent / f"{Path(PATH).stem}_stages.png"
-    fig.savefig(fig_path, dpi=120)
+    fig_path = Path(PATH).parent / f"{Path(PATH).stem}_stages.html"
+    fig.write_html(fig_path, include_plotlyjs="cdn")
     print(f"\nFigure saved to {fig_path}")

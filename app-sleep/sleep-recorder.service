@@ -1,0 +1,15 @@
+[Unit]
+Description=Ten-hour sleep movement and heart-rate recording
+
+[Service]
+Type=simple
+User=ceres
+Group=ceres
+Environment=HOME=/home/ceres
+ExecStartPre=+/bin/systemctl start sensorfwd.service
+ExecStart=/home/ceres/.local/bin/sleep-recorder-service
+ExecStopPost=+/bin/systemctl stop sensorfwd.service
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
