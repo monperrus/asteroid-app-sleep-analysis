@@ -79,6 +79,36 @@ It prints the onset difference, each side's deep share and Cohen's kappa of
 deep vs not-deep over the epochs both call sleep. It exits 2 when no
 Zeblaze night overlaps the recording.
 
+### Dual-wear night protocol
+
+For the series pre-registered in `prereg/2026-11-27-deep-vs-zeblaze.md`
+(5 nights).
+
+Evening:
+1. Charge the AsteroidOS watch to ≥ 95 %: the recorder stops at 9 %, which
+   took ~7.2 h on the 2026-11 nights.
+2. With the Zeblaze in BLE range of the laptop, enable its REM staging once
+   (it reports no REM otherwise):
+   `zeblaze-ble rem-set --i-understand-this-writes D6:45:15:30:04:71`
+3. Wear one watch on each wrist; start the recorder from the Sleep Recorder
+   app.
+
+Morning:
+1. Fetch the recording: `app-sleep/fetch-sleep-recording.sh` over SSH, or
+   over USB: `adb pull /home/ceres/sleep-recordings/sleep-<start>.jsonl .`
+2. Sync the Zeblaze with the laptop in BLE range:
+   `zeblaze-ble sleep D6:45:15:30:04:71 --i-understand-this-writes > sleep-$(date +%Y%m%d)-zeblaze.json`
+   The daily anacron job (`zeblaze-sleep-sync.sh`) does the same, but only
+   when the watch is in range; out of range it leaves an empty file. A file
+   holds the last few nights, named by the sync day, not the night.
+3. Score the night:
+   ```
+   python3 analyze_sleep.py --analyze sleep-<start>.jsonl --epochs sleep-<start>.csv
+   python3 compare_reference.py sleep-<start>.csv sleep-<day>-zeblaze.json
+   ```
+   Keep the night if the overlap is ≥ 4 h; otherwise log it as excluded and
+   record another one.
+
 ## Stages
 
 `wake` / `light` / `deep` / `rem`, plus `unknown1`: movement-suppressed
