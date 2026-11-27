@@ -90,8 +90,8 @@ Evening:
 2. With the Zeblaze in BLE range of the laptop, enable its REM staging once
    (it reports no REM otherwise):
    `zeblaze-ble rem-set --i-understand-this-writes D6:45:15:30:04:71`
-3. Wear one watch on each wrist; start the recorder from the Sleep Recorder
-   app.
+3. Wear one watch on each wrist; start the recorder from the "Start Sleep
+   Recording (10h)" launcher entry.
 
 Morning:
 1. Fetch the recording: `app-sleep/fetch-sleep-recording.sh` over SSH, or
