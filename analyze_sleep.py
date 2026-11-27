@@ -3,7 +3,7 @@
 Two-step workflow, see README.md for details:
   analyze_sleep.py --calibrate <file.jsonl>   fit thresholds, save calibration.json
   analyze_sleep.py --analyze   <file.jsonl>   classify against saved thresholds,
-                                               print a report, write <stem>_stages.png
+                                               print a report, write <stem>_stages.html
 """
 
 import argparse
@@ -24,10 +24,13 @@ def parse_args():
     mode.add_argument("--analyze", action="store_true",
                        help="classify PATH against thresholds saved by --calibrate, instead of refitting per run")
     p.add_argument("path", nargs="?", default=DEFAULT_PATH, help="sleep data jsonl file")
+    p.add_argument("--calibration", type=Path, default=CALIBRATION_PATH,
+                   help=f"calibration file to write (--calibrate) or read (--analyze), default {CALIBRATION_PATH.name}")
     return p.parse_args()
 
 args = parse_args()
 PATH = args.path
+CALIBRATION_PATH = args.calibration
 calib = {} if args.calibrate else json.loads(CALIBRATION_PATH.read_text())
 
 def parse_ts(s):
@@ -62,6 +65,7 @@ mov_diff = np.abs(np.diff(mov_mag))
 mov_diff_t = mov_t[1:]
 
 activity = np.zeros(n_epochs)
+peak_jerk = np.zeros(n_epochs)  # largest single jerk in the epoch, for sleep onset
 counts = np.zeros(n_epochs)
 for i in range(n_epochs):
     m = (mov_diff_t >= edges[i]) & (mov_diff_t < edges[i+1])
@@ -70,6 +74,7 @@ for i in range(n_epochs):
     # mean, not sum: sample spacing is irregular (~1-7s gaps), so summing raw
     # diffs would confound sample density with true movement level.
     activity[i] = mov_diff[m].mean() if c else 0.0
+    peak_jerk[i] = mov_diff[m].max() if c else 0.0
 
 # hr per epoch: nearest-sample forward/backward fill
 hr_epoch = np.full(n_epochs, np.nan)
@@ -121,15 +126,13 @@ def smooth_binary(arr, win=3):
 is_sleep = smooth_binary(is_sleep_raw.astype(float), win=3)
 
 # ---- Determine sleep period (onset to offset), allowing WASO in between ----
-# Comparison with the ground truth shows that these sustained-run time
-# boundaries are good. Keep this onset/offset logic independent from the
-# within-sleep stage cleanup below so smoothing stages cannot move them.
+# Keep this onset/offset logic independent from the within-sleep stage
+# cleanup below so smoothing stages cannot move them.
 sleep_idx = np.flatnonzero(is_sleep)
 if len(sleep_idx) == 0:
     raise SystemExit("No sleep detected")
-onset_i, offset_i = sleep_idx[0], sleep_idx[-1]
 
-# require sustained sleep for onset (>=5 consecutive min = 10 epochs) to avoid false start
+# Offset: the end of the last sustained (>=5 min = 10 epochs) sleep run.
 def find_onset(is_sleep, min_epochs=10):
     run = 0
     for i, v in enumerate(is_sleep):
@@ -141,7 +144,29 @@ def find_onset(is_sleep, min_epochs=10):
             run = 0
     return int(np.flatnonzero(is_sleep)[0])
 
-onset_i = find_onset(is_sleep)
+# Onset: the first 10 min of immobility (actigraphy convention, e.g. Actiware),
+# not the first 5 min below the wake/sleep activity threshold. Lying awake in
+# bed keeps the epoch *mean* activity under that threshold, so the old rule
+# put onset within a minute of recording start on most nights. What sets
+# quiet wake apart is a brief movement burst every few minutes (single jerks
+# of 25-1500 against a resting peak of ~8-15), so an immobile epoch is one
+# whose largest jerk stays under IMMOBILE_PEAK_MULT x the night's median
+# epoch peak. On 2026-09-01 this puts onset at 00:41; the Zeblaze reference
+# watch says 00:36 (the old rule said 00:27). Movement only: HR still above
+# its night baseline (e.g. 2026-11-17, 60 vs 56 bpm until 23:12) is not used.
+ONSET_IMMOBILE_EPOCHS = 20  # 10 min
+IMMOBILE_PEAK_MULT = 3.0
+
+def find_immobile_onset(is_sleep, peak_jerk, min_epochs=ONSET_IMMOBILE_EPOCHS):
+    immobile = is_sleep & (peak_jerk < IMMOBILE_PEAK_MULT * np.median(peak_jerk))
+    run = 0
+    for i, v in enumerate(immobile):
+        run = run + 1 if v else 0
+        if run >= min_epochs:
+            return i - min_epochs + 1
+    return find_onset(is_sleep)  # never still for 10 min: fall back to the activity rule
+
+onset_i = find_immobile_onset(is_sleep, peak_jerk)
 offset_i = len(is_sleep) - 1 - find_onset(is_sleep[::-1].copy())
 
 window = slice(onset_i, offset_i + 1)
@@ -323,6 +348,19 @@ for name in ["light","deep","rem","unknown1"]:
     n = (epoch_stage[window]==name).sum()
     pct = n/sleep_epochs_in_window*100 if sleep_epochs_in_window else 0
     print(f"  {name:8s}: {fmt_dur(n):8s} ({pct:.1f}% of sleep)")
+
+# Movement + HR cannot tell N2 from N3: "deep" is "still with a calm HR", which
+# N2 also is, and the 30-min rolling-median HR baseline is computed mostly from
+# those same epochs. Adult N3 is ~13-23% of sleep (AASM norms; the Zeblaze
+# reference watch reported 23-30% on 2026-08/09 nights), while this classifier
+# reports 50-72%. Flag a night outside a generous plausible range instead of
+# letting the number pass as a measurement.
+DEEP_PLAUSIBLE_PCT = (10.0, 35.0)
+deep_pct = (epoch_stage[window] == "deep").sum() / sleep_epochs_in_window * 100 if sleep_epochs_in_window else 0
+if not DEEP_PLAUSIBLE_PCT[0] <= deep_pct <= DEEP_PLAUSIBLE_PCT[1]:
+    print(f"  WARNING: deep {deep_pct:.0f}% is outside the plausible {DEEP_PLAUSIBLE_PCT[0]:.0f}-"
+          f"{DEEP_PLAUSIBLE_PCT[1]:.0f}% of sleep: the deep/light split is unreliable on this night "
+          f"(movement+HR cannot separate N2 from N3)")
 print()
 print("Stage cluster centers (move_level, hr_detrend, hr_var), by stage:")
 for name in ["deep", "rem", "light", "unknown1"]:

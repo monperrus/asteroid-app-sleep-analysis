@@ -44,6 +44,15 @@ python3 analyze_sleep.py --calibrate night.jsonl   # fits stage thresholds, writ
 python3 analyze_sleep.py --analyze   night.jsonl   # classifies against calibration.json
 ```
 
+`--calibration PATH` reads or writes another calibration file instead of the
+one next to the script.
+
+Sleep onset is the first 10 min of immobility (no epoch with a movement
+burst above 3x the night's median epoch peak), because lying awake in bed
+stays under the wake/sleep activity threshold. The report warns when `deep`
+is outside 10-35% of sleep; so far it is 53-76% on every recorded night,
+because movement and HR cannot separate N2 from N3 (see `TODO.md`).
+
 `--analyze` prints a text report (sleep onset/offset, time-in-stage,
 hypnogram, arousal/spike listings) and writes `<stem>_stages.html`: 5 stacked
 interactive time-series panels (raw movement, raw HR, and the three

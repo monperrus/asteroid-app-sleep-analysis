@@ -75,3 +75,23 @@ non-committal label rather than folding it into `deep` or `rem` - the
 aggregate REM%/deep% numbers already can't be trusted at face value (see
 above), and quietly reassigning `unknown1` to `rem` would inflate REM% based
 on a hypothesis, not evidence.
+
+## "deep" is 53-76% of sleep on every night
+
+`deep` = still tier + HR nearest the calibrated deep center. N2 is also still
+with a calm HR, and the 30-min rolling-median HR baseline is computed mostly
+from those same epochs, so `hr_detrend` of the deep cluster is ~0 by
+construction. Adult N3 is ~13-23% of sleep; the Zeblaze watch reported
+23-30% on 2026-08/09 nights. The report now warns outside 10-35%, which so
+far fires on all 9 recorded nights.
+
+**To do:** find a feature that separates N3 from N2 (candidates: HR below a
+night-wide low quantile instead of a local median; N3 concentrated in the
+first third of the night; minimum bout length), and validate it against a
+reference with staging (Zeblaze nights overlap only 2026-09-01 so far).
+
+## Sleep onset ignores HR
+
+Onset is movement only (first 10 min of immobility). On 2026-11-17 it lands
+at 22:55 while HR stays at 60-61 bpm, above its 56 bpm night level, until
+23:12. A "HR settled near its night median" condition could tighten it.
