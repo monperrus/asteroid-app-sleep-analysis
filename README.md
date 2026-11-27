@@ -64,6 +64,21 @@ hr_var) that drove its classification. Open the file in a browser.
 `calibration.json` and the generated `.html`/`.jsonl` files are local,
 regeneratable/private artifacts and are gitignored — not checked in.
 
+## Comparing with the Zeblaze watch
+
+Wearing the Zeblaze on the same night gives a second staging (`zeblaze-ble
+sleep`, synced daily into `sleep-YYYYMMDD-zeblaze.json`). Its own algorithm
+is a consumer one, not polysomnography, and it never reports wake.
+
+```
+python3 analyze_sleep.py --analyze night.jsonl --epochs night_epochs.csv
+python3 compare_reference.py night_epochs.csv sleep-YYYYMMDD-zeblaze.json [--json]
+```
+
+It prints the onset difference, each side's deep share and Cohen's kappa of
+deep vs not-deep over the epochs both call sleep. It exits 2 when no
+Zeblaze night overlaps the recording.
+
 ## Stages
 
 `wake` / `light` / `deep` / `rem`, plus `unknown1`: movement-suppressed

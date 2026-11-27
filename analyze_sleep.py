@@ -26,6 +26,8 @@ def parse_args():
     p.add_argument("path", nargs="?", default=DEFAULT_PATH, help="sleep data jsonl file")
     p.add_argument("--calibration", type=Path, default=CALIBRATION_PATH,
                    help=f"calibration file to write (--calibrate) or read (--analyze), default {CALIBRATION_PATH.name}")
+    p.add_argument("--epochs", type=Path,
+                   help="also write each 30 s epoch's stage to this CSV (start_unix,stage), for compare_reference.py")
     return p.parse_args()
 
 args = parse_args()
@@ -431,6 +433,12 @@ for i in spike_idx:
 if args.calibrate:
     CALIBRATION_PATH.write_text(json.dumps(calib, indent=2))
     print(f"\nCalibration saved to {CALIBRATION_PATH}")
+
+if args.epochs:
+    with args.epochs.open("w") as f:
+        f.write("start_unix,stage\n")
+        for i in range(n_epochs):
+            f.write(f"{t0 + i * EPOCH_S:.3f},{epoch_stage[i]}\n")
 
 # ---- Figure: raw signals + clustering inputs, shaded by classified stage ----
 # Interactive (Plotly/HTML): hovering a shaded stage region shows its precise

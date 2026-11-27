@@ -8,3 +8,6 @@ __pycache__/
 calibration.json
 *_stages.png
 *_stages.html
+
+# scratch plans, never committed
+plan-*.md
